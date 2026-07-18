@@ -1,0 +1,3 @@
+- [x] Fix 'from' field in sendWhatsAppText to include 'whatsapp:' prefix
+- [x] Add logging for Twilio response status
+- [x] Improve error handling for Twilio errors
