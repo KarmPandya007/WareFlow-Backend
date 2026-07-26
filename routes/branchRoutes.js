@@ -31,7 +31,7 @@ router.delete("/:id", protect, authorizeRoles("admin"), deleteBranch);
 router.delete("/", protect, authorizeRoles("admin"), deleteAllBranches);
 
 // POST /api/branches/init - Initialize sample branches (development only)
-router.post("/init", async (req, res) => {
+router.post("/init", protect, authorizeRoles("admin"), async (req, res) => {
   try {
     const existingBranches = await Branch.find();
     

@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Billing from "../models/billing.js";
 import Product from "../models/product.js";
 import Branch from "../models/branch.js";
@@ -73,10 +74,36 @@ ${attachmentOutput}`;
 
 // CREATE BILLING
 export const createBilling = async (req, res) => {
+  const session = await mongoose.startSession();
+  let transactionStarted = false;
+  try {
+    session.startTransaction();
+    transactionStarted = true;
+  } catch (err) {
+    console.warn("⚠️ Standalone MongoDB detected. Proceeding without transactions.");
+  }
+
+  const normalizeCategory = (cat) => {
+    if (!cat) return 'laptops';
+    const normalize = {
+      laptops: 'laptops',
+      laptop: 'laptops',
+      desktops: 'desktops',
+      desktop: 'desktops',
+      aios: 'aios',
+      aio: 'aios',
+      accessories: 'accessories',
+      accessory: 'accessories'
+    };
+    return normalize[String(cat).trim().toLowerCase()] || 'laptops';
+  };
+
   try {
     const user = req.user;
 
     if (!user || !user._id) {
+      if (transactionStarted) await session.abortTransaction();
+      session.endSession();
       return res.status(401).json({ 
         success: false, 
         message: "Authentication required. Please login again." 
@@ -84,6 +111,8 @@ export const createBilling = async (req, res) => {
     }
 
     if (!req.body.customerName) {
+      if (transactionStarted) await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Customer name is required"
@@ -91,6 +120,8 @@ export const createBilling = async (req, res) => {
     }
 
     if (!req.body.totalAmount) {
+      if (transactionStarted) await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Total amount is required"
@@ -114,7 +145,7 @@ export const createBilling = async (req, res) => {
 
     if (sessionId) {
       try {
-        const qrUploads = await QRUpload.find({ sessionId, processed: false });
+        const qrUploads = await QRUpload.find({ sessionId, processed: false }).session(transactionStarted ? session : null);
 
         for (const upload of qrUploads) {
           const fieldType = upload.fieldType || "General Attachment";
@@ -138,10 +169,10 @@ export const createBilling = async (req, res) => {
           }
 
           upload.processed = true;
-          await upload.save();
+          await upload.save(transactionStarted ? { session } : {});
         }
-        } catch (err) {
-        // Don't return error here, continue with billing creation
+      } catch (err) {
+        console.error("⚠️ QRUpload resolution error:", err.message);
       }
     }
 
@@ -153,7 +184,7 @@ export const createBilling = async (req, res) => {
     const tryResolve = async (raw) => {
       if (!raw && raw !== 0) return null;
 
-      // If it's an object already (e.g., frontend sent JSON string that was parsed), accept _id or id
+      // If it's an object already, accept _id or id
       if (typeof raw === 'object') {
         if (raw._id && /^[0-9a-fA-F]{24}$/.test(String(raw._id))) return raw._id;
         if (raw.id && /^[0-9a-fA-F]{24}$/.test(String(raw.id))) return raw.id;
@@ -177,21 +208,21 @@ export const createBilling = async (req, res) => {
 
       // Now try as string id
       if (typeof raw === 'string' && /^[0-9a-fA-F]{24}$/.test(raw)) {
-        const bdoc = await Branch.findById(raw).select('_id').lean();
+        const bdoc = await Branch.findById(raw).session(transactionStarted ? session : null).select('_id').lean();
         if (bdoc) return bdoc._id;
       }
 
       // Try as code
       if (typeof raw === 'string') {
-        const bdoc = await Branch.findOne({ code: raw }).select('_id').lean();
+        const bdoc = await Branch.findOne({ code: raw }).session(transactionStarted ? session : null).select('_id').lean();
         if (bdoc) return bdoc._id;
 
         // Try exact name (case-insensitive)
-        let bdocName = await Branch.findOne({ name: new RegExp(`^${escapeRegExp(String(raw))}$`, 'i') }).select('_id').lean();
+        let bdocName = await Branch.findOne({ name: new RegExp(`^${escapeRegExp(String(raw))}$`, 'i') }).session(transactionStarted ? session : null).select('_id').lean();
         if (bdocName) return bdocName._id;
 
         // Try partial name
-        bdocName = await Branch.findOne({ name: new RegExp(escapeRegExp(String(raw)), 'i') }).select('_id').lean();
+        bdocName = await Branch.findOne({ name: new RegExp(escapeRegExp(String(raw)), 'i') }).session(transactionStarted ? session : null).select('_id').lean();
         if (bdocName) return bdocName._id;
       }
 
@@ -210,6 +241,8 @@ export const createBilling = async (req, res) => {
     if (!branchId && user.branch) branchId = user.branch;
 
     if (!branchId) {
+      if (transactionStarted) await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ success: false, message: 'Branch is required for billing. Provide branch id, code or name, or ensure the authenticated user has a branch.' });
     }
 
@@ -261,13 +294,11 @@ export const createBilling = async (req, res) => {
       try {
         billingData.paymentMode = JSON.parse(billingData.paymentMode);
       } catch (e) {
-        // If not JSON, treat as legacy format and convert to new format
         const modes = billingData.paymentMode.split(',').map(mode => mode.trim()).filter(mode => mode);
         billingData.paymentMode = modes.map(mode => ({ mode, amount: 0 }));
       }
     }
 
-    // If paymentMode includes Cheque (case-insensitive), require cheque number
     const paymentModes = Array.isArray(billingData.paymentMode) 
       ? billingData.paymentMode.map(pm => typeof pm === 'object' ? pm.mode : pm)
       : (billingData.paymentMode ? [billingData.paymentMode] : []);
@@ -276,13 +307,30 @@ export const createBilling = async (req, res) => {
     if (hasCheque || hasBank) {
       const chequeNo = req.body.chequeNumber || req.body.chequeNo || billingData.chequeNumber || req.body.cheque_number;
       if (hasCheque && (!chequeNo || String(chequeNo).trim() === '')) {
+        if (transactionStarted) await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: 'Cheque number is required when payment mode includes Cheque' });
       }
       if (chequeNo) billingData.chequeNumber = String(chequeNo).trim();
     }
 
+    // Validate that the sum of payment mode amounts matches totalAmount
+    if (billingData.paymentMode && Array.isArray(billingData.paymentMode)) {
+      const paymentSum = billingData.paymentMode.reduce((sum, pm) => sum + (pm.amount || 0), 0);
+      if (Math.abs(paymentSum - billingData.totalAmount) > 0.01) {
+        if (transactionStarted) await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: `The sum of payment mode amounts (₹${paymentSum}) must equal the total amount (₹${billingData.totalAmount})`
+        });
+      }
+    }
+
     // Validate required fields
     if (!req.body.customerName) {
+      if (transactionStarted) await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Customer name is required"
@@ -290,6 +338,8 @@ export const createBilling = async (req, res) => {
     }
 
     if (!req.body.totalAmount || req.body.totalAmount <= 0) {
+      if (transactionStarted) await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: "Valid total amount is required"
@@ -327,13 +377,15 @@ export const createBilling = async (req, res) => {
         if (typeof productData === 'string') {
           if (productData.match(/^[0-9a-fA-F]{24}$/)) {
             try {
-              const existingProduct = await Product.findById(productData);
+              const existingProduct = await Product.findById(productData).session(transactionStarted ? session : null);
               if (!existingProduct) continue;
               productIds.push(productData);
             } catch (error) {
               continue;
             }
           } else {
+            if (transactionStarted) await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({
               success: false,
               message: 'Product name and category are required for new products. Please send a product object with both fields.'
@@ -341,20 +393,22 @@ export const createBilling = async (req, res) => {
           }
         }
         else if (typeof productData === 'object' && productData.name && productData.category) {
-          let existingProduct = await Product.findOne({ name: productData.name, category: productData.category });
+          const normCat = normalizeCategory(productData.category);
+          let existingProduct = await Product.findOne({ name: productData.name, category: normCat }).session(transactionStarted ? session : null);
           if (existingProduct) {
             productIds.push(existingProduct._id);
           } else {
             try {
-              const product = await Product.create({
+              const product = new Product({
                 name: productData.name,
-                category: productData.category,
+                category: normCat,
                 model: productData.model || '',
                 serialNumber: productData.serialNumber || '',
                 checkCode: productData.checkCode || '',
                 price: productData.price || 0,
                 description: productData.description || ''
               });
+              await product.save(transactionStarted ? { session } : {});
               productIds.push(product._id);
             } catch (productError) {
               continue;
@@ -363,16 +417,27 @@ export const createBilling = async (req, res) => {
         }
         else if (typeof productData === 'object' && productData.name && productData.model && productData.price) {
           try {
-            const product = await Product.create({
+            const modelLower = String(productData.model).toLowerCase();
+            let cat = 'laptops';
+            if (modelLower.includes('laptop')) cat = 'laptops';
+            else if (modelLower.includes('desktop')) cat = 'desktops';
+            else if (modelLower.includes('aio') || modelLower.includes('all-in-one')) cat = 'aios';
+            else if (modelLower.includes('mouse') || modelLower.includes('keyboard') || modelLower.includes('headset') || modelLower.includes('accessory')) cat = 'accessories';
+
+            const product = new Product({
               name: productData.name,
+              category: cat,
               model: productData.model,
               serialNumber: productData.serialNumber || "",
               checkCode: productData.checkCode || "",
               price: productData.price,
               description: productData.description || ""
             });
+            await product.save(transactionStarted ? { session } : {});
             productIds.push(product._id);
           } catch (productError) {
+            if (transactionStarted) await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({
               success: false,
               message: `Failed to create product: ${productError.message}`
@@ -390,14 +455,18 @@ export const createBilling = async (req, res) => {
     // Update billing data with product IDs
     billingData.products = productIds;
 
-    const newBilling = await Billing.create(billingData);
+    const newBilling = new Billing(billingData);
+    await newBilling.save(transactionStarted ? { session } : {});
 
     const populatedBilling = await Billing.findById(newBilling._id)
+      .session(transactionStarted ? session : null)
       .populate("branch", "name code location")
       .populate("salesPerson", "firstName lastName email")
       .populate("products", "name model serialNumber");
 
-    // Tally/XML integration removed — not sending invoice to Tally from server
+    // Commit Transaction
+    if (transactionStarted) await session.commitTransaction();
+    session.endSession();
 
     // WhatsApp notification (async, non-blocking)
     (async () => {
@@ -405,7 +474,7 @@ export const createBilling = async (req, res) => {
         const adminMessage = buildAdminBillingMessage(populatedBilling);
         await sendWhatsAppAdminText("916204504480", adminMessage);
       } catch (err) {
-        console.log(`⚠️ WhatsApp notification skipped (token issue)`);
+        console.error(`⚠️ WhatsApp notification failed:`, err.message);
       }
     })();
 
@@ -421,80 +490,64 @@ export const createBilling = async (req, res) => {
 
         for (const target of activeTargets) {
           if (target.targetType === "billing_count") {
-            const count = await Billing.countDocuments({
-              salesPerson: user._id,
-              createdAt: { $gte: target.startDate, $lte: target.endDate },
-            });
-            target.currentValue = count;
-          } else if (target.targetType === "billing_amount") {
-            const result = await Billing.aggregate([
-              {
-                $match: {
-                  salesPerson: user._id,
-                  createdAt: { $gte: target.startDate, $lte: target.endDate },
-                },
-              },
-              { $group: { _id: null, total: { $sum: "$totalAmount" } } },
-            ]);
-            target.currentValue = result.length > 0 ? result[0].total : 0;
-          } else if (target.targetType === "product_based") {
-            // Update each product category target
-            for (let i = 0; i < target.productTargets.length; i++) {
-              const productTarget = target.productTargets[i];
-              const count = await Billing.aggregate([
-                {
-                  $match: {
-                    salesPerson: user._id,
-                    createdAt: { $gte: target.startDate, $lte: target.endDate },
-                  },
-                },
-                { $unwind: "$products" },
-                {
-                  $lookup: {
-                    from: "products",
-                    localField: "products",
-                    foreignField: "_id",
-                    as: "productDetails",
-                  },
-                },
-                { $unwind: "$productDetails" },
-                {
-                  $match: {
-                    "productDetails.category": productTarget.category,
-                  },
-                },
-                {
-                  $group: {
-                    _id: null,
-                    count: { $sum: 1 },
-                  },
-                },
-              ]);
-              target.productTargets[i].currentValue = count.length > 0 ? count[0].count : 0;
-            }
-            target.markModified('productTargets');
-            
-            // Check if all product targets are met
-            const allTargetsMet = target.productTargets.every(
-              (pt) => pt.currentValue >= pt.targetValue
+            await Target.updateOne(
+              { _id: target._id },
+              { $inc: { currentValue: 1 } }
             );
-            if (allTargetsMet) {
-              target.status = "completed";
+            const updated = await Target.findById(target._id);
+            if (updated.currentValue >= updated.targetValue) {
+              updated.status = "completed";
+              await updated.save();
+            }
+          } else if (target.targetType === "billing_amount") {
+            await Target.updateOne(
+              { _id: target._id },
+              { $inc: { currentValue: billingData.totalAmount } }
+            );
+            const updated = await Target.findById(target._id);
+            if (updated.currentValue >= updated.targetValue) {
+              updated.status = "completed";
+              await updated.save();
+            }
+          } else if (target.targetType === "product_based") {
+            const products = populatedBilling.products || [];
+            const categoryCounts = {};
+            products.forEach(p => {
+              if (p && p.category) {
+                categoryCounts[p.category] = (categoryCounts[p.category] || 0) + 1;
+              }
+            });
+
+            let modified = false;
+            for (let i = 0; i < target.productTargets.length; i++) {
+              const pt = target.productTargets[i];
+              if (categoryCounts[pt.category]) {
+                await Target.updateOne(
+                  { _id: target._id, "productTargets.category": pt.category },
+                  { $inc: { "productTargets.$.currentValue": categoryCounts[pt.category] } }
+                );
+                modified = true;
+              }
+            }
+
+            if (modified) {
+              const updated = await Target.findById(target._id);
+              const allTargetsMet = updated.productTargets.every(
+                (pt) => pt.currentValue >= pt.targetValue
+              );
+              if (allTargetsMet) {
+                updated.status = "completed";
+                await updated.save();
+              }
             }
           }
-
-          // Update status based on target completion
-          if (target.targetType !== "product_based" && target.currentValue >= target.targetValue) {
-            target.status = "completed";
-          }
-
-          await target.save();
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error("❌ Background target update failed:", err.message);
+      }
     });
 
     console.log(`✅ Billing created: ${populatedBilling.customerName} | Products: ${populatedBilling.products.length} | Payment: ${JSON.stringify(populatedBilling.paymentMode)}`);
-    console.log(`⚠️ WhatsApp notification skipped (token issue)`);
 
     res.status(201).json({
       success: true,
@@ -502,6 +555,9 @@ export const createBilling = async (req, res) => {
       billing: populatedBilling,
     });
   } catch (error) {
+    if (transactionStarted) await session.abortTransaction();
+    session.endSession();
+
     if (error.name === 'ValidationError') {
       const validationErrors = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({ 
@@ -543,9 +599,11 @@ export const exportBillings = async (req, res) => {
     const filter = {};
     if (branch) filter.branch = branch;
     if (fromDate && toDate) {
+      const end = new Date(toDate);
+      end.setHours(23, 59, 59, 999);
       filter.date = {
         $gte: new Date(fromDate),
-        $lte: new Date(toDate),
+        $lte: end,
       };
     }
 
@@ -620,8 +678,48 @@ export const getAllBillings = async (req, res) => {
   try {
     const filter = req.user.role === "sales_person" ? { salesPerson: req.user._id } : {};
 
-    // Fetch billings with salesPerson and products populated, but keep the raw `branch` value
-    let billings = await Billing.find(filter)
+    // Branch filter
+    if (req.query.branch && req.query.branch !== "all") {
+      filter.branch = req.query.branch;
+    }
+
+    // Sales person filter (admin only)
+    if (req.query.salesPerson && req.query.salesPerson !== "all" && req.user.role === "admin") {
+      filter.salesPerson = req.query.salesPerson;
+    }
+
+    // Search query
+    if (req.query.search && req.query.search.trim()) {
+      const escaped = escapeRegExp(req.query.search.trim());
+      filter.$or = [
+        { customerName: new RegExp(escaped, "i") },
+        { mobile: new RegExp(escaped, "i") }
+      ];
+    }
+
+    // Date filtering (for Day Book and reports)
+    if (req.query.date) {
+      const startOfDay = new Date(req.query.date);
+      startOfDay.setUTCHours(0, 0, 0, 0);
+      const endOfDay = new Date(req.query.date);
+      endOfDay.setUTCHours(23, 59, 59, 999);
+      filter.date = { $gte: startOfDay, $lte: endOfDay };
+    } else if (req.query.fromDate && req.query.toDate) {
+      const end = new Date(req.query.toDate);
+      end.setHours(23, 59, 59, 999);
+      filter.date = {
+        $gte: new Date(req.query.fromDate),
+        $lte: end
+      };
+    }
+
+    // Count matching documents
+    const totalCount = await Billing.countDocuments(filter);
+
+    // Pagination inputs
+    const page = parseInt(req.query.page);
+    const limit = parseInt(req.query.limit);
+    let query = Billing.find(filter)
       .populate("salesPerson", "firstName lastName email")
       .populate({
         path: "products",
@@ -629,15 +727,19 @@ export const getAllBillings = async (req, res) => {
         select: "model serialNumber checkCode category",
       })
       .populate("branch")
-      .lean();
+      .sort({ date: -1, createdAt: -1 });
+
+    if (page && limit) {
+      const skip = (page - 1) * limit;
+      query = query.skip(skip).limit(limit);
+    }
+
+    let billings = await query.lean();
 
     // For any billing where branch is not an object (i.e. not populated), try to resolve it:
-    // - If branch looks like an ObjectId, try Branch.findById
-    // - Otherwise try Branch.findOne by `code`, then by `name` (case-insensitive)
     for (let i = 0; i < billings.length; i++) {
       const b = billings[i];
 
-      // If already populated (object with name), skip
       if (b.branch && typeof b.branch === "object" && (b.branch.name || b.branch.code)) {
         continue;
       }
@@ -660,15 +762,9 @@ export const getAllBillings = async (req, res) => {
         branchDoc = await Branch.findOne({ code: rawBranch }).select("name code location").lean();
       }
 
-      // Try as exact name (case-insensitive), then fallback to partial match
+      // Try as name match
       if (!branchDoc) {
         branchDoc = await Branch.findOne({ name: new RegExp(`^${escapeRegExp(String(rawBranch))}$`, "i") })
-          .select("name code location")
-          .lean();
-      }
-
-      if (!branchDoc) {
-        branchDoc = await Branch.findOne({ name: new RegExp(escapeRegExp(String(rawBranch)), "i") })
           .select("name code location")
           .lean();
       }
@@ -676,11 +772,78 @@ export const getAllBillings = async (req, res) => {
       b.branch = branchDoc || null;
     }
 
-    res.status(200).json({
+    // Calculate overall stats matching the filter (ignoring pagination bounds)
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setUTCHours(23, 59, 59, 999);
+
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    monthStart.setUTCHours(0, 0, 0, 0);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    monthEnd.setUTCHours(23, 59, 59, 999);
+
+    const statsAgg = await Billing.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalBills: { $sum: 1 },
+          totalRevenue: { $sum: "$totalAmount" },
+          todayBills: {
+            $sum: {
+              $cond: [
+                { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
+                1,
+                0
+              ]
+            }
+          },
+          todayRevenue: {
+            $sum: {
+              $cond: [
+                { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
+                "$totalAmount",
+                0
+              ]
+            }
+          },
+          monthRevenue: {
+            $sum: {
+              $cond: [
+                { $and: [{ $gte: ["$date", monthStart] }, { $lte: ["$date", monthEnd] }] },
+                "$totalAmount",
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const stats = statsAgg.length > 0 ? statsAgg[0] : {
+      totalBills: 0,
+      totalRevenue: 0,
+      todayBills: 0,
+      todayRevenue: 0,
+      monthRevenue: 0
+    };
+    if (stats._id !== undefined) delete stats._id;
+
+    const payload = {
       success: true,
-      count: billings.length,
+      count: totalCount,
       billings,
-    });
+      stats
+    };
+
+    if (page && limit) {
+      payload.totalPages = Math.ceil(totalCount / limit);
+      payload.currentPage = page;
+    }
+
+    res.status(200).json(payload);
   } catch (error) {
     console.error("Get billings error:", error);
     res.status(500).json({ success: false, message: error.message });
@@ -698,7 +861,8 @@ export const getBillingById = async (req, res) => {
     const billing = await Billing.findById(req.params.id)
       .populate("branch", "name code location")
       .populate("salesPerson", "firstName lastName email")
-      .populate("products");
+      .populate("products")
+      .lean();
 
     if (!billing) {
       return res.status(404).json({ success: false, message: "Billing not found" });
@@ -802,6 +966,9 @@ export const deleteBilling = async (req, res) => {
     const salesPersonId = billing.salesPerson;
     const billingDate = billing.createdAt;
 
+    // Cache populated products before deleting
+    const populatedForProducts = await Billing.findById(billing._id).populate("products").lean();
+
     await billing.deleteOne();
 
     // Recalculate affected targets
@@ -813,69 +980,52 @@ export const deleteBilling = async (req, res) => {
 
     for (const target of affectedTargets) {
       if (target.targetType === "billing_count") {
-        const count = await Billing.countDocuments({
-          salesPerson: target.user,
-          createdAt: { $gte: target.startDate, $lte: target.endDate },
-        });
-        target.currentValue = count;
-      } else if (target.targetType === "billing_amount") {
-        const result = await Billing.aggregate([
-          {
-            $match: {
-              salesPerson: target.user,
-              createdAt: { $gte: target.startDate, $lte: target.endDate },
-            },
-          },
-          { $group: { _id: null, total: { $sum: "$totalAmount" } } },
-        ]);
-        target.currentValue = result.length > 0 ? result[0].total : 0;
-      } else if (target.targetType === "product_based") {
-        for (let i = 0; i < target.productTargets.length; i++) {
-          const productTarget = target.productTargets[i];
-          const count = await Billing.aggregate([
-            {
-              $match: {
-                salesPerson: target.user,
-                createdAt: { $gte: target.startDate, $lte: target.endDate },
-              },
-            },
-            { $unwind: "$products" },
-            {
-              $lookup: {
-                from: "products",
-                localField: "products",
-                foreignField: "_id",
-                as: "productDetails",
-              },
-            },
-            { $unwind: "$productDetails" },
-            {
-              $match: {
-                "productDetails.category": productTarget.category,
-              },
-            },
-            {
-              $group: {
-                _id: null,
-                count: { $sum: 1 },
-              },
-            },
-          ]);
-          target.productTargets[i].currentValue = count.length > 0 ? count[0].count : 0;
-        }
-        target.markModified('productTargets');
-        
-        const allTargetsMet = target.productTargets.every(
-          (pt) => pt.currentValue >= pt.targetValue
+        await Target.updateOne(
+          { _id: target._id },
+          { $inc: { currentValue: -1 } }
         );
-        target.status = allTargetsMet ? "completed" : "active";
-      }
+        const updated = await Target.findById(target._id);
+        updated.status = updated.currentValue >= updated.targetValue ? "completed" : "active";
+        await updated.save();
+      } else if (target.targetType === "billing_amount") {
+        await Target.updateOne(
+          { _id: target._id },
+          { $inc: { currentValue: -billing.totalAmount } }
+        );
+        const updated = await Target.findById(target._id);
+        updated.status = updated.currentValue >= updated.targetValue ? "completed" : "active";
+        await updated.save();
+      } else if (target.targetType === "product_based") {
+        const categoryCounts = {};
+        if (populatedForProducts && Array.isArray(populatedForProducts.products)) {
+          populatedForProducts.products.forEach(p => {
+            if (p && p.category) {
+              categoryCounts[p.category] = (categoryCounts[p.category] || 0) + 1;
+            }
+          });
+        }
 
-      if (target.targetType !== "product_based") {
-        target.status = target.currentValue >= target.targetValue ? "completed" : "active";
-      }
+        let modified = false;
+        for (let i = 0; i < target.productTargets.length; i++) {
+          const pt = target.productTargets[i];
+          if (categoryCounts[pt.category]) {
+            await Target.updateOne(
+              { _id: target._id, "productTargets.category": pt.category },
+              { $inc: { "productTargets.$.currentValue": -categoryCounts[pt.category] } }
+            );
+            modified = true;
+          }
+        }
 
-      await target.save();
+        if (modified) {
+          const updated = await Target.findById(target._id);
+          const allTargetsMet = updated.productTargets.every(
+            (pt) => pt.currentValue >= pt.targetValue
+          );
+          updated.status = allTargetsMet ? "completed" : "active";
+          await updated.save();
+        }
+      }
     }
 
     res.status(200).json({

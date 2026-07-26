@@ -5,6 +5,11 @@ import mongoose from "mongoose";
 
 import Product from "../models/product.js";
 
+// Helper to escape user-provided strings for RegExp
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // ---------------------------
 // DASHBOARD: TOTALS
 // ---------------------------
@@ -114,13 +119,17 @@ export const getFilteredBillings = async (req, res) => {
     const { branch, salesPerson, from, to, paymentMode, customerName, minAmount, maxAmount } = req.query;
 
     const filter = {};
-    if(branch) filter.branch = mongoose.Types.ObjectId(branch);
-    if(salesPerson) filter.salesPerson = mongoose.Types.ObjectId(salesPerson);
+    if(branch) filter.branch = new mongoose.Types.ObjectId(branch);
+    if(salesPerson) filter.salesPerson = new mongoose.Types.ObjectId(salesPerson);
     if(from || to) filter.createdAt = {};
     if(from) filter.createdAt.$gte = new Date(from);
-    if(to) filter.createdAt.$lte = new Date(to);
+    if(to) {
+      const end = new Date(to);
+      end.setHours(23, 59, 59, 999);
+      filter.createdAt.$lte = end;
+    }
     if(paymentMode) filter.paymentMode = paymentMode;
-    if(customerName) filter.customerName = { $regex: customerName, $options: "i" };
+    if(customerName) filter.customerName = { $regex: escapeRegExp(customerName), $options: "i" };
     if(minAmount || maxAmount) filter.totalAmount = {};
     if(minAmount) filter.totalAmount.$gte = Number(minAmount);
     if(maxAmount) filter.totalAmount.$lte = Number(maxAmount);
@@ -209,13 +218,17 @@ export const getCustomReport = async (req, res) => {
     // Build dynamic filter
     const filter = {};
 
-    if (branch) filter.branch = mongoose.Types.ObjectId(branch);
-    if (salesPerson) filter.salesPerson = mongoose.Types.ObjectId(salesPerson);
+    if (branch) filter.branch = new mongoose.Types.ObjectId(branch);
+    if (salesPerson) filter.salesPerson = new mongoose.Types.ObjectId(salesPerson);
     if (paymentMode) filter.paymentMode = paymentMode;
     if (startDate || endDate) {
       filter.date = {};
       if (startDate) filter.date.$gte = new Date(startDate);
-      if (endDate) filter.date.$lte = new Date(endDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.date.$lte = end;
+      }
     }
     if (minAmount || maxAmount) {
       filter.totalAmount = {};
@@ -227,7 +240,7 @@ export const getCustomReport = async (req, res) => {
 
     // Filter by product if provided
     if (productId) {
-      aggregatePipeline.push({ $match: { products: mongoose.Types.ObjectId(productId) } });
+      aggregatePipeline.push({ $match: { products: new mongoose.Types.ObjectId(productId) } });
     }
 
     // Populate branch and sales person info

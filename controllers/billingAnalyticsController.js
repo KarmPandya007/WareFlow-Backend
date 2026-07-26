@@ -10,9 +10,11 @@ export const getDailyTrends = async (req, res) => {
     if (branchId) filter.branch = new mongoose.Types.ObjectId(branchId);
     if (userId) filter.salesPerson = new mongoose.Types.ObjectId(userId);
     if (startDate && endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
       filter.date = {
         $gte: new Date(startDate),
-        $lte: new Date(endDate),
+        $lte: end,
       };
     }
 

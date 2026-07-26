@@ -62,4 +62,7 @@ branchSchema.pre("save", async function (next) {
   next();
 });
 
+branchSchema.index({ name: 1 });
+branchSchema.index({ status: 1 });
+
 export default mongoose.model("Branch", branchSchema);

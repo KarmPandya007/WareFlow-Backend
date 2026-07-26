@@ -1,14 +1,21 @@
 // services/whatsappCloudService.js
 import axios from "axios";
+import Config from "../models/config.js";
 
 const WHATSAPP_API_URL =
   process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v22.0";
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 
-function assertEnv() {
-  if (!PHONE_NUMBER_ID) throw new Error("Missing WHATSAPP_PHONE_NUMBER_ID");
-  if (!ACCESS_TOKEN) throw new Error("Missing WHATSAPP_ACCESS_TOKEN");
+async function getAccessToken() {
+  try {
+    const config = await Config.findOne({ key: "WHATSAPP_ACCESS_TOKEN" }).lean();
+    if (config && config.value) {
+      return config.value;
+    }
+  } catch (e) {
+    console.error("Failed to load WhatsApp token from database, using env fallback:", e.message);
+  }
+  return process.env.WHATSAPP_ACCESS_TOKEN;
 }
 
 // Format phone number (remove '+')
@@ -23,7 +30,9 @@ function fmt(msisdn) {
  */
 export async function sendWhatsAppAdminText(to, message) {
   try {
-    assertEnv();
+    const token = await getAccessToken();
+    if (!PHONE_NUMBER_ID) throw new Error("Missing WHATSAPP_PHONE_NUMBER_ID");
+    if (!token) throw new Error("Missing WHATSAPP_ACCESS_TOKEN");
 
     const payload = {
       messaging_product: "whatsapp",
@@ -39,7 +48,7 @@ export async function sendWhatsAppAdminText(to, message) {
       payload,
       {
         headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         timeout: 15000,

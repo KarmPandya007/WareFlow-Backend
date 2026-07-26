@@ -151,18 +151,25 @@ export const getAllTargets = async (req, res) => {
       .populate("assignedBy", "firstName lastName")
       .sort({ createdAt: -1 });
 
+    for (const target of targets) {
+      await calculateProgress(target);
+    }
+
+    const updatedTargets = await Target.find()
+      .populate("user", "firstName lastName email")
+      .populate("assignedBy", "firstName lastName")
+      .sort({ createdAt: -1 });
+
     res.status(200).json({
       success: true,
-      count: targets.length,
-      targets,
+      count: updatedTargets.length,
+      targets: updatedTargets,
     });
   } catch (error) {
     console.error("Get all targets error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
-
 
 // GET MY TARGETS (Sales Person)
 export const getMyTargets = async (req, res) => {
@@ -275,7 +282,7 @@ export const bulkUploadTargets = async (req, res) => {
     }
 
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(req.file.path);
+    await workbook.xlsx.load(req.file.buffer);
     const worksheet = workbook.getWorksheet(1);
 
     const results = { success: [], failed: [] };
@@ -283,14 +290,22 @@ export const bulkUploadTargets = async (req, res) => {
     for (let i = 2; i <= worksheet.rowCount; i++) {
       const row = worksheet.getRow(i);
       try {
-        const salespersonName = row.getCell(1).value; // Column A
-        const email = row.getCell(2).value; // Column B
-        const targetType = row.getCell(3).value; // Column C
-        const targetValue = row.getCell(4).value; // Column D
-        const period = row.getCell(8).value; // Column H
-        const startDate = row.getCell(9).value; // Column I
-        const endDate = row.getCell(10).value; // Column J
-        const incentiveAmount = row.getCell(11).value || 0; // Column K
+        const getCleanCellValue = (cell) => {
+          if (!cell || cell.value === null || cell.value === undefined) return "";
+          if (typeof cell.value === "object") {
+            return cell.value.result !== undefined ? cell.value.result : (cell.value.text || "");
+          }
+          return cell.value.toString().trim();
+        };
+
+        const salespersonName = getCleanCellValue(row.getCell(1)); // Column A
+        const email = getCleanCellValue(row.getCell(2)); // Column B
+        const targetType = getCleanCellValue(row.getCell(3)); // Column C
+        const targetValue = getCleanCellValue(row.getCell(4)); // Column D
+        const period = getCleanCellValue(row.getCell(8)); // Column H
+        const startDate = getCleanCellValue(row.getCell(9)); // Column I
+        const endDate = getCleanCellValue(row.getCell(10)); // Column J
+        const incentiveAmount = parseFloat(getCleanCellValue(row.getCell(11))) || 0; // Column K
 
         if (!email || !targetType || !period || !startDate || !endDate) {
           results.failed.push({ row: i, reason: "Missing required fields" });
@@ -336,15 +351,12 @@ export const bulkUploadTargets = async (req, res) => {
       }
     }
 
-    fs.unlinkSync(req.file.path);
-
     res.status(200).json({
       success: true,
       message: "Bulk upload completed",
       results,
     });
   } catch (error) {
-    if (req.file) fs.unlinkSync(req.file.path);
     console.error("Bulk upload error:", error);
     res.status(500).json({ success: false, message: error.message });
   }

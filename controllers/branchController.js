@@ -13,7 +13,7 @@ export const createBranch = async (req, res) => {
 
 export const getAllBranches = async (req, res) => {
   try {
-    const branches = await Branch.find();
+    const branches = await Branch.find().lean();
     res.status(200).json({ success: true, count: branches.length, branches });
   } catch (error) {
     console.error("Get branches error:", error);
@@ -23,7 +23,7 @@ export const getAllBranches = async (req, res) => {
 
 export const getBranchById = async (req, res) => {
   try {
-    const branch = await Branch.findById(req.params.id);
+    const branch = await Branch.findById(req.params.id).lean();
     if (!branch) return res.status(404).json({ success: false, message: "Branch not found" });
     res.status(200).json({ success: true, branch });
   } catch (error) {

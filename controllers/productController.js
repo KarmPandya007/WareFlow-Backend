@@ -21,14 +21,29 @@ export const createProduct = async (req, res) => {
       incentive,
       status 
     } = req.body;
-
     if (!name || !category || !model) {
       return res.status(400).json({ message: "Name, category and model are required" });
     }
 
+    const normalize = {
+      laptops: 'laptops',
+      laptop: 'laptops',
+      desktops: 'desktops',
+      desktop: 'desktops',
+      aios: 'aios',
+      aio: 'aios',
+      accessories: 'accessories',
+      accessory: 'accessories'
+    };
+
+    const normalizedCategory = normalize[String(category).trim().toLowerCase()];
+    if (!normalizedCategory) {
+      return res.status(400).json({ message: `Invalid category '${category}'. Allowed: Laptops, Desktops, AIOs, accessories` });
+    }
+
     const product = await Product.create({ 
       name,
-      category, 
+      category: normalizedCategory, 
       model, 
       serialNumber, 
       checkNumber, 
@@ -43,8 +58,7 @@ export const createProduct = async (req, res) => {
       incentive,
       status 
     });
-    res.status(201).json({ success: true, product });
-  } catch (error) {
+    res.status(201).json({ success: true, product });  } catch (error) {
     console.error("Create product error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
@@ -53,7 +67,7 @@ export const createProduct = async (req, res) => {
 // Get all products
 export const getProducts = async (req, res) => {
   try {
-    const allProducts = await Product.find();
+    const allProducts = await Product.find().lean();
     
     // Group products by category (DB uses plural category values)
     const laptops = allProducts.filter(p => p.category === "laptops");
@@ -82,7 +96,7 @@ export const getProducts = async (req, res) => {
 // Get a single product by ID
 export const getProductById = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findById(req.params.id).lean();
     if (!product) return res.status(404).json({ message: "Product not found" });
     res.status(200).json({ success: true, product });
   } catch (error) {
@@ -159,7 +173,11 @@ export const uploadProductsExcel = async (req, res) => {
     const headerRow = worksheet.getRow(1);
     const headerMap = {};
     headerRow.eachCell((cell, colNumber) => {
-      const header = (cell.value || '').toString().trim().toLowerCase();
+      let val = cell.value;
+      if (val && typeof val === 'object') {
+        val = val.result !== undefined ? val.result : (val.text || '');
+      }
+      const header = (val || '').toString().trim().toLowerCase();
       if (header) headerMap[header] = colNumber;
     });
 
@@ -173,8 +191,12 @@ export const uploadProductsExcel = async (req, res) => {
       const getValue = (key) => {
         const idx = headerMap[key];
         if (!idx) return '';
-        const val = row.values[idx];
-        return val === null || val === undefined ? '' : val.toString().trim();
+        const cell = row.getCell(idx);
+        if (!cell || cell.value === null || cell.value === undefined) return '';
+        if (typeof cell.value === 'object') {
+          return cell.value.result !== undefined ? cell.value.result.toString().trim() : (cell.value.text || '').toString().trim();
+        }
+        return cell.value.toString().trim();
       };
 
       const product = {

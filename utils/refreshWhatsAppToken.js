@@ -1,12 +1,17 @@
 import axios from "axios";
-import fs from "fs";
 import dotenv from "dotenv";
+import Config from "../models/config.js";
 
 dotenv.config();
 
 export async function refreshWhatsAppToken() {
   try {
-    const url = `https://graph.facebook.com/v22.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.WHATSAPP_APP_ID}&client_secret=${process.env.WHATSAPP_APP_SECRET}&fb_exchange_token=${process.env.WHATSAPP_ACCESS_TOKEN}`;
+    const currentToken = await Config.findOne({ key: "WHATSAPP_ACCESS_TOKEN" }).lean().then(c => c?.value) || process.env.WHATSAPP_ACCESS_TOKEN;
+    if (!currentToken) {
+      throw new Error("No current WhatsApp access token found in database or environment");
+    }
+
+    const url = `https://graph.facebook.com/v22.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.WHATSAPP_APP_ID}&client_secret=${process.env.WHATSAPP_APP_SECRET}&fb_exchange_token=${currentToken}`;
 
     const { data } = await axios.get(url);
 
@@ -15,22 +20,18 @@ export async function refreshWhatsAppToken() {
 
     const newToken = data.access_token;
 
-    // Save token to .env (auto replace)
-    const envPath = ".env";
-    let envFile = fs.readFileSync(envPath, "utf-8");
-
-    envFile = envFile.replace(
-      /WHATSAPP_ACCESS_TOKEN=.*/g,
-      `WHATSAPP_ACCESS_TOKEN=${newToken}`
+    // Save token to database
+    await Config.findOneAndUpdate(
+      { key: "WHATSAPP_ACCESS_TOKEN" },
+      { value: newToken },
+      { upsert: true, new: true }
     );
 
-    fs.writeFileSync(envPath, envFile);
-
-    console.log(" Token updated in .env");
+    console.log(" Token updated in database");
 
     return newToken;
   } catch (err) {
-    console.error(" Failed to refresh token:", err.response?.data || err);
+    console.error(" Failed to refresh token:", err.response?.data || err.message || err);
   }
 }
 

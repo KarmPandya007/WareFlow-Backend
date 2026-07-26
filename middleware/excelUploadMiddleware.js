@@ -1,14 +1,7 @@
 import multer from "multer";
 import path from "path";
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "data/");
-  },
-  filename: (req, file, cb) => {
-    cb(null, `targets-${Date.now()}${path.extname(file.originalname)}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const excelUpload = multer({
   storage,

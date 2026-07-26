@@ -137,4 +137,11 @@ billingSchema.pre("save", function (next) {
   next();
 });
 
+// Indexing branch, salesPerson and dates for faster lookups
+billingSchema.index({ branch: 1 });
+billingSchema.index({ salesPerson: 1 });
+billingSchema.index({ date: -1 });
+billingSchema.index({ createdAt: -1 });
+billingSchema.index({ salesPerson: 1, createdAt: -1 });
+
 export default mongoose.model("Billing", billingSchema);

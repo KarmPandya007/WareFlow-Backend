@@ -2,7 +2,7 @@ import AdvanceBooking from "../models/advanceBooking.js";
 
 export const getAllBookings = async (req, res) => {
   try {
-    const { status, branch, salesPerson, fromDate, toDate } = req.query;
+    const { status, branch, salesPerson, fromDate, toDate, page, limit } = req.query;
     let filter = {};
 
     // Sales person can only see their own bookings, admin sees all
@@ -17,16 +17,43 @@ export const getAllBookings = async (req, res) => {
     if (fromDate || toDate) {
       filter.createdAt = {};
       if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-      if (toDate) filter.createdAt.$lte = new Date(toDate);
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        filter.createdAt.$lte = end;
+      }
     }
 
-    const bookings = await AdvanceBooking.find(filter)
+    const totalCount = await AdvanceBooking.countDocuments(filter);
+
+    let query = AdvanceBooking.find(filter)
       .populate("branch", "name code")
       .populate("salesPerson", "firstName lastName")
       .populate("products", "name model serialNumber supportedAmount category")
       .sort({ createdAt: -1 });
 
-    res.json({ success: true, count: bookings.length, bookings });
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+
+    if (pageNum && limitNum) {
+      const skip = (pageNum - 1) * limitNum;
+      query = query.skip(skip).limit(limitNum);
+    }
+
+    const bookings = await query;
+
+    const payload = {
+      success: true,
+      count: totalCount,
+      bookings
+    };
+
+    if (pageNum && limitNum) {
+      payload.totalPages = Math.ceil(totalCount / limitNum);
+      payload.currentPage = pageNum;
+    }
+
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to fetch advance bookings", error: error.message });
   }

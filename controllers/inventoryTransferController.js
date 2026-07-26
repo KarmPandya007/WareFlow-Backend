@@ -213,17 +213,38 @@ export const getAllInventoryTransfers = async (req, res) => {
       query.createdBy = req.user._id;
     }
 
-    const transfers = await InventoryTransfer.find(query)
+    const { page, limit } = req.query;
+    const totalCount = await InventoryTransfer.countDocuments(query);
+
+    let mongooseQuery = InventoryTransfer.find(query)
       .populate("items.product", "model serialNumber")
       .populate("sourceGodown", "name")
       .populate("destinationGodown", "name")
       .populate("createdBy", "firstName lastName")
       .sort({ createdAt: -1 });
 
-    res.status(200).json({
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+
+    if (pageNum && limitNum) {
+      const skip = (pageNum - 1) * limitNum;
+      mongooseQuery = mongooseQuery.skip(skip).limit(limitNum);
+    }
+
+    const transfers = await mongooseQuery;
+
+    const payload = {
       message: "Inventory transfers fetched successfully",
+      count: totalCount,
       data: transfers
-    });
+    };
+
+    if (pageNum && limitNum) {
+      payload.totalPages = Math.ceil(totalCount / limitNum);
+      payload.currentPage = pageNum;
+    }
+
+    res.status(200).json(payload);
   } catch (error) {
     console.error("Inventory Transfer GET Error:", error);
     res.status(500).json({ message: "Internal server error" });

@@ -6,6 +6,7 @@ import authRoutes from "./routes/authRoutes.js";
 import branchRoutes from "./routes/branchRoutes.js";
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import compression from "compression";
 import billingRoutes from "./routes/billingRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
@@ -27,6 +28,7 @@ dotenv.config();
 connectDB();
 
 const app = express();
+app.use(compression());
 app.use(cookieParser());
 app.use(cors({
   origin: process.env.CLIENT_URL || "http://localhost:3000",
