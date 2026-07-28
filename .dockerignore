@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Environment files (injected at runtime via Docker secrets / --env-file)
+.env
+.env.*
+
+# Git
+.git/
+.gitignore
+
+# Dev / utility scripts
+clearDatabase.js
+exportAllCollections.js
+importAllCollections.js
+checkHeaders.js
+findIncentive.js
+updateIncentives.js
+removeDuplicates.js
+testWhatsApp.js
+excel-tests/
+
+# Excel / data files
+*.xlsx
+db_exports/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

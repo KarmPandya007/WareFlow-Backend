@@ -22,6 +22,7 @@ import gstRoutes from "./routes/gstRoutes.js";
 import targetRoutes from "./routes/targetRoutes.js";
 import billingAnalyticsRoutes from "./routes/billingAnalyticsRoutes.js";
 import advanceBookingRoutes from "./routes/advanceBookingRoutes.js";
+import aiRoutes from "./routes/aiRoutes.js";
 
 
 dotenv.config();
@@ -64,6 +65,7 @@ app.use("/api/billing-analytics", billingAnalyticsRoutes);
 app.use("/api/inventory-transfers", inventoryTransferRoutes);
 app.use("/api/inventory-transfer", inventoryTransferRoutes);
 app.use("/api/advance-bookings", advanceBookingRoutes);
+app.use("/api/ai", aiRoutes);
 
 // Global error handler
 app.use((error, req, res, next) => {
