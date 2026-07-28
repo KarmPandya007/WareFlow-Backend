@@ -178,4 +178,5 @@ advanceBookingSchema.pre("save", async function (next) {
   next();
 });
 
+
 export default mongoose.model("AdvanceBooking", advanceBookingSchema);
