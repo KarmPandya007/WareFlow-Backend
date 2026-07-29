@@ -49,12 +49,12 @@ async function tool_getBranchPerformance() {
   return Billing.aggregate([
     { $group: { _id: "$branch", totalAmount: { $sum: "$totalAmount" }, count: { $sum: 1 } } },
     { $lookup: { from: "branches", localField: "_id", foreignField: "_id", as: "branch" } },
-    { $unwind: "$branch" },
+    { $unwind: { path: "$branch", preserveNullAndEmptyArrays: true } },
     {
       $project: {
         _id: 0,
-        branchName: "$branch.name",
-        branchCode: "$branch.code",
+        branchName: { $ifNull: ["$branch.name", "Unknown Branch"] },
+        branchCode: { $ifNull: ["$branch.code", "N/A"] },
         totalAmount: 1,
         count: 1,
       },
@@ -154,6 +154,64 @@ async function tool_getAllTargets() {
   }));
 }
 
+async function tool_getTopProducts({ category, limit = 10 } = {}) {
+  const matchStage = category && typeof category === "string" && category.trim().length > 0
+    ? { "product.category": new RegExp(`^${category.trim()}$`, "i") }
+    : {};
+
+  return Billing.aggregate([
+    { $unwind: "$products" },
+    { $lookup: { from: "products", localField: "products", foreignField: "_id", as: "product" } },
+    { $unwind: "$product" },
+    { $match: matchStage },
+    {
+      $group: {
+        _id: { name: "$product.name", model: "$product.model", category: "$product.category" },
+        unitsSold: { $sum: 1 },
+        totalRevenue: { $sum: "$product.price" },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        name: "$_id.name",
+        model: "$_id.model",
+        category: "$_id.category",
+        unitsSold: 1,
+        totalRevenue: 1,
+      },
+    },
+    { $sort: { unitsSold: -1, totalRevenue: -1 } },
+    { $limit: limit },
+  ]);
+}
+
+async function tool_getTopCustomers({ limit = 10 } = {}) {
+  return Billing.aggregate([
+    {
+      $group: {
+        _id: "$customerName",
+        mobile: { $first: "$mobile" },
+        orderCount: { $sum: 1 },
+        totalSpent: { $sum: "$totalAmount" },
+        lastOrderDate: { $max: "$date" },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        customerName: "$_id",
+        mobile: 1,
+        orderCount: 1,
+        totalSpent: 1,
+        lastOrderDate: 1,
+      },
+    },
+    { $sort: { orderCount: -1, totalSpent: -1 } },
+    { $limit: limit },
+  ]);
+}
+
 // ── Tool Declarations for Gemini ──────────────────────────────────────────────
 
 const tools = [
@@ -161,25 +219,40 @@ const tools = [
     name: "get_dashboard_totals",
     description:
       "Returns today's, this week's, and this month's billing count and total revenue.",
-    parameters: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_branch_performance",
     description:
       "Returns total revenue and billing count for every branch, sorted by revenue descending.",
-    parameters: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_sales_person_performance",
     description:
       "Returns total revenue and billing count for every salesperson, sorted by revenue descending.",
-    parameters: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_product_category_breakdown",
     description:
       "Returns number of units sold and revenue by product category (e.g. Laptop, Desktop, AIO).",
-    parameters: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_top_products",
+    description:
+      "Returns specific top selling product items or models by units sold and revenue. Optional category filter (e.g. desktops, laptops, aios, accessories).",
+    parameters: {
+      type: "object",
+      properties: {
+        category: {
+          type: "string",
+          description: "Optional product category to filter by (e.g. desktops, laptops, aios, accessories)",
+        },
+      },
+    },
+  },
+  {
+    name: "get_top_customers",
+    description:
+      "Returns top repeat customers ranked by order/invoice count and total amount spent.",
   },
   {
     name: "get_monthly_trends",
@@ -193,22 +266,20 @@ const tools = [
           description: "The calendar year to fetch data for (e.g. 2026). Defaults to the current year.",
         },
       },
-      required: [],
     },
   },
   {
     name: "get_payment_mode_breakdown",
     description:
       "Returns billing count and revenue broken down by payment mode (Cash, UPI, Machine, etc.).",
-    parameters: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_all_targets",
     description:
       "Returns all sales targets including their type, target value, current progress, status, and assigned salesperson.",
-    parameters: { type: "object", properties: {}, required: [] },
   },
 ];
+
 
 // ── Tool Dispatcher ───────────────────────────────────────────────────────────
 
@@ -218,6 +289,8 @@ async function dispatchTool(name, args) {
     case "get_branch_performance":       return tool_getBranchPerformance();
     case "get_sales_person_performance": return tool_getSalesPersonPerformance();
     case "get_product_category_breakdown": return tool_getProductCategoryBreakdown();
+    case "get_top_products":             return tool_getTopProducts(args ?? {});
+    case "get_top_customers":            return tool_getTopCustomers(args ?? {});
     case "get_monthly_trends":           return tool_getMonthlyTrends(args ?? {});
     case "get_payment_mode_breakdown":   return tool_getPaymentModeBreakdown();
     case "get_all_targets":              return tool_getAllTargets();
@@ -227,24 +300,21 @@ async function dispatchTool(name, args) {
 
 // ── System Prompt ─────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are WareFlow AI, an intelligent business analytics assistant for a retail billing and inventory management system. You help store administrators and managers understand their business data through natural language.
+const SYSTEM_PROMPT = `You are WareFlow AI, an intelligent business analytics assistant for a retail billing and inventory management system.
 
-Your capabilities:
-- Billing revenue totals (today, week, month)
-- Branch performance comparisons
-- Salesperson performance rankings
-- Product category sales breakdown
-- Monthly revenue trends
-- Payment mode analysis
-- Target progress and completion status
+CRITICAL DIRECTIVES:
+1. YOU ARE DIRECTLY CONNECTED TO THE LIVE MONGODB DATABASE via tools.
+2. Whenever a user asks ANY question about branch performance, revenue, sales, salespersons, targets, product categories, top products/models, repeat customers, or trends, YOU MUST IMMEDIATELY CALL THE APPROPRIATE TOOL to fetch live data.
+3. NEVER claim you lack database access.
+4. NEVER tell the user to paste SQL queries, tables, or data exports.
+5. NEVER give generic advice when asked for store metrics — call the tools first, then present the real database numbers!
 
-Rules:
-- Always respond in clear, concise English.
-- Format monetary values in Indian Rupees (₹) with proper comma formatting (e.g. ₹1,20,000).
-- When presenting multiple items, use markdown tables or bullet lists for readability.
-- If data shows clear insights, proactively highlight them (e.g. "Branch X leads with ₹X revenue").
-- You have READ-ONLY access. Never suggest or attempt any data modifications.
-- If a question is unrelated to WareFlow business data, politely decline and explain what you can help with.
+TABLE FORMATTING RULES (STRICT):
+- ALWAYS format data in clean GitHub Flavored Markdown (GFM) tables with header divider lines (e.g., | Column 1 | Column 2 |).
+- ALWAYS put a blank line BEFORE starting a table and a blank line AFTER finishing a table.
+- Every single table row MUST be on its own line. Never concatenate rows onto a single line.
+- Format monetary values in Indian Rupees (₹) with proper Indian numbering system (e.g., ₹57,10,527).
+- Proactively highlight key insights after presenting the data table.
 - Today's date is ${new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}.`;
 
 // ── Main Controller ───────────────────────────────────────────────────────────
@@ -262,7 +332,6 @@ export const chat = async (req, res) => {
     }
 
     // Build conversation contents for the API
-    // Keep last 10 turns to avoid large context payloads
     const recentHistory = history.slice(-10);
 
     const contents = [
@@ -277,11 +346,13 @@ export const chat = async (req, res) => {
 
     // First call: allow Gemini to request tools
     let response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      systemInstruction: SYSTEM_PROMPT,
+      model: "gemini-3.1-flash-lite",
       contents,
-      tools: [{ functionDeclarations: tools }],
-      toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        tools: [{ functionDeclarations: tools }],
+        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+      },
     });
 
     // Agentic loop: resolve all tool calls before final response
@@ -318,11 +389,13 @@ export const chat = async (req, res) => {
 
       // Continue the conversation
       response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        systemInstruction: SYSTEM_PROMPT,
+        model: "gemini-3.1-flash-lite",
         contents,
-        tools: [{ functionDeclarations: tools }],
-        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+          tools: [{ functionDeclarations: tools }],
+          toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+        },
       });
     }
 
@@ -338,6 +411,7 @@ export const chat = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "AI assistant is temporarily unavailable. Please try again later.",
+      _debug: error?.message ?? String(error),
     });
   }
 };
