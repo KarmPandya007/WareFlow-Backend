@@ -3,6 +3,7 @@ import {
   createProduct,
   getProducts,
   getProductById,
+  getProductCounts,
   updateProduct,
   deleteProduct,
   uploadProductsExcel,
@@ -24,8 +25,9 @@ router.put("/:id", protect, authorizeRoles("admin","sales_person"), updateProduc
 router.delete("/", protect, authorizeRoles("admin"), deleteAllProducts);
 router.delete("/:id", protect, authorizeRoles("admin","sales_person"), deleteProduct);
 
-
+router.get("/counts", protect, authorizeRoles("admin", "sales_person"), getProductCounts);
 router.get("/", protect, authorizeRoles("admin", "sales_person"), getProducts);
 router.get("/:id", protect, authorizeRoles("admin", "sales_person"), getProductById);
 
 export default router;
+

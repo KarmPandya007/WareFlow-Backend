@@ -231,7 +231,7 @@ export const getAllInventoryTransfers = async (req, res) => {
       mongooseQuery = mongooseQuery.skip(skip).limit(limitNum);
     }
 
-    const transfers = await mongooseQuery;
+    const transfers = await mongooseQuery.lean();
 
     const payload = {
       message: "Inventory transfers fetched successfully",

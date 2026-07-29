@@ -178,5 +178,12 @@ advanceBookingSchema.pre("save", async function (next) {
   next();
 });
 
+advanceBookingSchema.index({ bookingId: 1 });
+advanceBookingSchema.index({ branch: 1, date: -1 });
+advanceBookingSchema.index({ salesPerson: 1, date: -1 });
+advanceBookingSchema.index({ bookingStatus: 1 });
+advanceBookingSchema.index({ customerName: 1 });
+advanceBookingSchema.index({ mobile: 1 });
+advanceBookingSchema.index({ createdAt: -1 });
 
 export default mongoose.model("AdvanceBooking", advanceBookingSchema);

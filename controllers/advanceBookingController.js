@@ -40,7 +40,7 @@ export const getAllBookings = async (req, res) => {
       query = query.skip(skip).limit(limitNum);
     }
 
-    const bookings = await query;
+    const bookings = await query.lean();
 
     const payload = {
       success: true,

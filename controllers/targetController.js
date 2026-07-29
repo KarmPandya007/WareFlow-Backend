@@ -25,38 +25,39 @@ export const calculateProgress = async (target) => {
     ]);
     target.currentValue = result.length > 0 ? result[0].total : 0;
   } else if (target.targetType === "product_based") {
+    const categoryCounts = await Billing.aggregate([
+      {
+        $match: {
+          salesPerson: new mongoose.Types.ObjectId(target.user),
+          createdAt: { $gte: target.startDate, $lte: target.endDate },
+        },
+      },
+      { $unwind: "$products" },
+      {
+        $lookup: {
+          from: "products",
+          localField: "products",
+          foreignField: "_id",
+          as: "productDetails",
+        },
+      },
+      { $unwind: "$productDetails" },
+      {
+        $group: {
+          _id: "$productDetails.category",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const countMap = {};
+    categoryCounts.forEach((c) => {
+      if (c._id) countMap[c._id] = c.count;
+    });
+
     for (let i = 0; i < target.productTargets.length; i++) {
-      const productTarget = target.productTargets[i];
-      const count = await Billing.aggregate([
-        {
-          $match: {
-            salesPerson: new mongoose.Types.ObjectId(target.user),
-            createdAt: { $gte: target.startDate, $lte: target.endDate },
-          },
-        },
-        { $unwind: "$products" },
-        {
-          $lookup: {
-            from: "products",
-            localField: "products",
-            foreignField: "_id",
-            as: "productDetails",
-          },
-        },
-        { $unwind: "$productDetails" },
-        {
-          $match: {
-            "productDetails.category": productTarget.category,
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            count: { $sum: 1 },
-          },
-        },
-      ]);
-      target.productTargets[i].currentValue = count.length > 0 ? count[0].count : 0;
+      const pt = target.productTargets[i];
+      pt.currentValue = countMap[pt.category] || 0;
     }
     target.markModified('productTargets');
     
@@ -151,19 +152,13 @@ export const getAllTargets = async (req, res) => {
       .populate("assignedBy", "firstName lastName")
       .sort({ createdAt: -1 });
 
-    for (const target of targets) {
-      await calculateProgress(target);
-    }
-
-    const updatedTargets = await Target.find()
-      .populate("user", "firstName lastName email")
-      .populate("assignedBy", "firstName lastName")
-      .sort({ createdAt: -1 });
+    // Recalculate progress concurrently for all active targets
+    await Promise.all(targets.map((target) => calculateProgress(target)));
 
     res.status(200).json({
       success: true,
-      count: updatedTargets.length,
-      targets: updatedTargets,
+      count: targets.length,
+      targets,
     });
   } catch (error) {
     console.error("Get all targets error:", error);
@@ -178,20 +173,13 @@ export const getMyTargets = async (req, res) => {
       .populate("assignedBy", "firstName lastName")
       .sort({ createdAt: -1 });
 
-    // Recalculate progress for each target
-    for (const target of targets) {
-      await calculateProgress(target);
-    }
-
-    // Fetch updated targets
-    const updatedTargets = await Target.find({ user: req.user._id })
-      .populate("assignedBy", "firstName lastName")
-      .sort({ createdAt: -1 });
+    // Recalculate progress concurrently for active targets
+    await Promise.all(targets.map((target) => calculateProgress(target)));
 
     res.status(200).json({
       success: true,
-      count: updatedTargets.length,
-      targets: updatedTargets,
+      count: targets.length,
+      targets,
     });
   } catch (error) {
     console.error("Get my targets error:", error);

@@ -736,100 +736,104 @@ export const getAllBillings = async (req, res) => {
 
     let billings = await query.lean();
 
-    // For any billing where branch is not an object (i.e. not populated), try to resolve it:
-    for (let i = 0; i < billings.length; i++) {
-      const b = billings[i];
-
-      if (b.branch && typeof b.branch === "object" && (b.branch.name || b.branch.code)) {
-        continue;
+    // Fast batch resolution for unpopulated branch references
+    const unpopulatedIds = new Set();
+    billings.forEach((b) => {
+      if (b.branch && (typeof b.branch !== "object" || (!b.branch.name && !b.branch.code))) {
+        unpopulatedIds.add(String(b.branch));
       }
+    });
 
-      const rawBranch = b.branch;
-      if (!rawBranch) {
-        b.branch = null;
-        continue;
-      }
+    if (unpopulatedIds.size > 0) {
+      const validObjectIds = Array.from(unpopulatedIds).filter((id) => /^[0-9a-fA-F]{24}$/.test(id));
+      const branchDocs = await Branch.find({
+        $or: [
+          { _id: { $in: validObjectIds } },
+          { code: { $in: Array.from(unpopulatedIds) } },
+          { name: { $in: Array.from(unpopulatedIds) } },
+        ],
+      })
+        .select("name code location")
+        .lean();
 
-      let branchDoc = null;
+      const branchMap = new Map();
+      branchDocs.forEach((doc) => {
+        branchMap.set(String(doc._id), doc);
+        if (doc.code) branchMap.set(doc.code, doc);
+        if (doc.name) branchMap.set(doc.name, doc);
+      });
 
-      // Try as ObjectId string
-      if (typeof rawBranch === "string" && /^[0-9a-fA-F]{24}$/.test(rawBranch)) {
-        branchDoc = await Branch.findById(rawBranch).select("name code location").lean();
-      }
-
-      // Try as code
-      if (!branchDoc) {
-        branchDoc = await Branch.findOne({ code: rawBranch }).select("name code location").lean();
-      }
-
-      // Try as name match
-      if (!branchDoc) {
-        branchDoc = await Branch.findOne({ name: new RegExp(`^${escapeRegExp(String(rawBranch))}$`, "i") })
-          .select("name code location")
-          .lean();
-      }
-
-      b.branch = branchDoc || null;
+      billings.forEach((b) => {
+        if (b.branch && (typeof b.branch !== "object" || (!b.branch.name && !b.branch.code))) {
+          b.branch = branchMap.get(String(b.branch)) || null;
+        }
+      });
     }
 
-    // Calculate overall stats matching the filter (ignoring pagination bounds)
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setUTCHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setUTCHours(23, 59, 59, 999);
-
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    monthStart.setUTCHours(0, 0, 0, 0);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    monthEnd.setUTCHours(23, 59, 59, 999);
-
-    const statsAgg = await Billing.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: null,
-          totalBills: { $sum: 1 },
-          totalRevenue: { $sum: "$totalAmount" },
-          todayBills: {
-            $sum: {
-              $cond: [
-                { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
-                1,
-                0
-              ]
-            }
-          },
-          todayRevenue: {
-            $sum: {
-              $cond: [
-                { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
-                "$totalAmount",
-                0
-              ]
-            }
-          },
-          monthRevenue: {
-            $sum: {
-              $cond: [
-                { $and: [{ $gte: ["$date", monthStart] }, { $lte: ["$date", monthEnd] }] },
-                "$totalAmount",
-                0
-              ]
-            }
-          }
-        }
-      }
-    ]);
-
-    const stats = statsAgg.length > 0 ? statsAgg[0] : {
-      totalBills: 0,
+    // Calculate overall stats matching the filter (only for page 1 or initial requests to save DB resources)
+    let stats = {
+      totalBills: totalCount,
       totalRevenue: 0,
       todayBills: 0,
       todayRevenue: 0,
       monthRevenue: 0
     };
-    if (stats._id !== undefined) delete stats._id;
+
+    if (!page || page === 1) {
+      const now = new Date();
+      const todayStart = new Date(now);
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayEnd = new Date(now);
+      todayEnd.setUTCHours(23, 59, 59, 999);
+
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      monthStart.setUTCHours(0, 0, 0, 0);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      monthEnd.setUTCHours(23, 59, 59, 999);
+
+      const statsAgg = await Billing.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            totalBills: { $sum: 1 },
+            totalRevenue: { $sum: "$totalAmount" },
+            todayBills: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
+                  1,
+                  0
+                ]
+              }
+            },
+            todayRevenue: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
+                  "$totalAmount",
+                  0
+                ]
+              }
+            },
+            monthRevenue: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $gte: ["$date", monthStart] }, { $lte: ["$date", monthEnd] }] },
+                  "$totalAmount",
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ]);
+
+      if (statsAgg.length > 0) {
+        stats = statsAgg[0];
+        delete stats._id;
+      }
+    }
 
     const payload = {
       success: true,

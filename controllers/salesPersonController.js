@@ -12,7 +12,8 @@ export const getAllSalesPersons = async (req, res) => {
     const salesPersons = await User.find({ role: "sales_person" })
       .populate("branches", "name code")
       .select("-pin")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     const formatted = salesPersons.map((person, index) => ({
       no: index + 1,

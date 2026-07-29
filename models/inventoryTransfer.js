@@ -66,5 +66,12 @@ const inventoryTransferSchema = new mongoose.Schema({
   }
 });
 
+inventoryTransferSchema.index({ date: -1 });
+inventoryTransferSchema.index({ sourceGodown: 1 });
+inventoryTransferSchema.index({ destinationGodown: 1 });
+inventoryTransferSchema.index({ createdBy: 1 });
+inventoryTransferSchema.index({ createdAt: -1 });
+inventoryTransferSchema.index({ createdBy: 1, createdAt: -1 });
+
 export default mongoose.model("InventoryTransfer", inventoryTransferSchema);
 

@@ -64,17 +64,61 @@ export const createProduct = async (req, res) => {
   }
 };
 
-// Get all products
+// Get all products (supports optional pagination, search, category filter)
 export const getProducts = async (req, res) => {
   try {
-    const allProducts = await Product.find().lean();
-    
-    // Group products by category (DB uses plural category values)
+    const { page, limit, search, category } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+
+    // Build filter
+    const filter = {};
+    if (category && category !== "all") {
+      const normalize = {
+        laptops: "laptops", laptop: "laptops",
+        desktops: "desktops", desktop: "desktops",
+        aios: "aios", aio: "aios",
+        accessories: "accessories", accessory: "accessories",
+      };
+      const normalized = normalize[String(category).trim().toLowerCase()];
+      if (normalized) filter.category = normalized;
+    }
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { name: new RegExp(escaped, "i") },
+        { model: new RegExp(escaped, "i") },
+        { serialNumber: new RegExp(escaped, "i") },
+      ];
+    }
+
+    // ── Paginated path ──────────────────────────────────────────────
+    if (pageNum && limitNum) {
+      const totalCount = await Product.countDocuments(filter);
+      const products = await Product.find(filter)
+        .select("name category model serialNumber branch srp supportedAmount status checkNumber")
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        count: totalCount,
+        totalPages: Math.ceil(totalCount / limitNum),
+        currentPage: pageNum,
+        products,
+      });
+    }
+
+    // ── Legacy grouped path (backwards-compatible) ──────────────────
+    const allProducts = await Product.find(filter).lean();
+
     const laptops = allProducts.filter(p => p.category === "laptops");
     const desktops = allProducts.filter(p => p.category === "desktops");
     const aios = allProducts.filter(p => p.category === "aios");
     const accessories = allProducts.filter(p => p.category === "accessories");
-    
+
     const totalCount = laptops.length + desktops.length + aios.length + accessories.length;
 
     res.status(200).json({ 
@@ -89,6 +133,22 @@ export const getProducts = async (req, res) => {
     });
   } catch (error) {
     console.error("Get products error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Lightweight counts-only endpoint for dashboards/charts
+export const getProductCounts = async (req, res) => {
+  try {
+    const counts = await Product.aggregate([
+      { $group: { _id: "$category", count: { $sum: 1 } } },
+    ]);
+    const result = { laptops: 0, desktops: 0, aios: 0, accessories: 0 };
+    counts.forEach(c => { if (result.hasOwnProperty(c._id)) result[c._id] = c.count; });
+    result.total = Object.values(result).reduce((a, b) => a + b, 0);
+    res.status(200).json({ success: true, counts: result });
+  } catch (error) {
+    console.error("Get product counts error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

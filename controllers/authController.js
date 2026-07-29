@@ -184,7 +184,7 @@ export const login = async (req, res) => {
     const { phone, pin } = req.body;
     
     const user = await User.findOne({ phone, status: "active" })
-      .select('_id firstName lastName role branch pin')
+      .select('_id firstName lastName role branch pin theme')
       .lean();
     
     if (!user) {
@@ -214,7 +214,8 @@ export const login = async (req, res) => {
         firstName: user.firstName, 
         lastName: user.lastName,
         role: user.role, 
-        branch: user.branch 
+        branch: user.branch,
+        theme: user.theme || "light"
       },
     });
   } catch (error) {
@@ -237,5 +238,52 @@ export const logout = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Error while logging out" });
+  }
+};
+
+export const getMe = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select("-pin");
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    res.status(200).json({
+      success: true,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        theme: user.theme || "light",
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Error fetching user profile" });
+  }
+};
+
+export const updateTheme = async (req, res) => {
+  try {
+    const { theme } = req.body;
+    if (!theme || !["light", "dark"].includes(theme)) {
+      return res.status(400).json({ success: false, message: "Invalid theme choice" });
+    }
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user._id,
+      { theme },
+      { new: true }
+    ).select("-pin");
+
+    res.status(200).json({
+      success: true,
+      message: "Theme updated successfully",
+      theme: updatedUser.theme,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Error updating theme" });
   }
 };

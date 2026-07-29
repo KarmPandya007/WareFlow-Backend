@@ -79,6 +79,10 @@ const productSchema = new mongoose.Schema(
 );
 
 productSchema.index({ name: 1, category: 1 });
+productSchema.index({ category: 1 });
+productSchema.index({ model: 1 });
+productSchema.index({ serialNumber: 1 });
+productSchema.index({ branch: 1 });
 productSchema.index({ status: 1 });
 
 export default mongoose.model("Product", productSchema);
