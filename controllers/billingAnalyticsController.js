@@ -1,22 +1,34 @@
 import Billing from "../models/billing.js";
 import mongoose from "mongoose";
 
+const addAnalyticsFilters = (req, filter, { includeDates = true } = {}) => {
+  const { branchId, startDate, endDate, userId } = req.query;
+
+  if (branchId && mongoose.isValidObjectId(branchId)) {
+    filter.branch = new mongoose.Types.ObjectId(branchId);
+  }
+
+  if (req.user.role === "sales_person") {
+    filter.salesPerson = new mongoose.Types.ObjectId(req.user._id);
+  } else if (userId && mongoose.isValidObjectId(userId)) {
+    filter.salesPerson = new mongoose.Types.ObjectId(userId);
+  }
+
+  if (includeDates && startDate && endDate) {
+    const end = new Date(endDate);
+    end.setUTCHours(23, 59, 59, 999);
+    filter.date = { $gte: new Date(startDate), $lte: end };
+  }
+
+  return filter;
+};
+
 // GET DAILY BILLING TRENDS
 export const getDailyTrends = async (req, res) => {
   try {
     const { branchId, startDate, endDate, userId } = req.query;
 
-    const filter = {};
-    if (branchId) filter.branch = new mongoose.Types.ObjectId(branchId);
-    if (userId) filter.salesPerson = new mongoose.Types.ObjectId(userId);
-    if (startDate && endDate) {
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      filter.date = {
-        $gte: new Date(startDate),
-        $lte: end,
-      };
-    }
+    const filter = addAnalyticsFilters(req, {});
 
     const dailyData = await Billing.aggregate([
       { $match: filter },
@@ -52,9 +64,7 @@ export const getDailyTrends = async (req, res) => {
 export const getDeviceBreakdown = async (req, res) => {
   try {
     const { branchId } = req.query;
-
-    const filter = {};
-    if (branchId) filter.branch = new mongoose.Types.ObjectId(branchId);
+    const filter = addAnalyticsFilters(req, {});
 
     const deviceData = await Billing.aggregate([
       { $match: filter },
@@ -70,19 +80,31 @@ export const getDeviceBreakdown = async (req, res) => {
       { $unwind: "$productDetails" },
       {
         $group: {
-          _id: "$productDetails.category",
+          _id: {
+            date: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+            category: "$productDetails.category",
+          },
           count: { $sum: 1 },
-          totalAmount: { $sum: "$totalAmount" },
+          totalAmount: {
+            $sum: {
+              $ifNull: [
+                "$productDetails.supportedAmount",
+                { $ifNull: ["$productDetails.srp", "$productDetails.price"] },
+              ],
+            },
+          },
         },
       },
       {
         $project: {
-          category: "$_id",
+          date: "$_id.date",
+          category: "$_id.category",
           count: 1,
           totalAmount: 1,
           _id: 0,
         },
       },
+      { $sort: { date: 1, category: 1 } },
     ]);
 
     res.json({

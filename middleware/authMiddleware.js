@@ -15,7 +15,9 @@ export const protect = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select("-pin");
+    const user = await User.findById(decoded.id)
+      .select("_id firstName lastName email role status branch branches")
+      .lean();
     if (!user) {
       return res.status(401).json({ success: false, message: "User not found" });
     }
@@ -39,4 +41,3 @@ export const authorizeRoles = (...allowedRoles) => {
     next();
   };
 };
-

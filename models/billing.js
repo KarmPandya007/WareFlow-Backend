@@ -138,10 +138,11 @@ billingSchema.pre("save", function (next) {
 });
 
 // Indexing branch, salesPerson and dates for faster lookups
-billingSchema.index({ branch: 1, date: -1 });
-billingSchema.index({ salesPerson: 1, date: -1 });
-billingSchema.index({ date: -1 });
+billingSchema.index({ branch: 1, date: -1, createdAt: -1 });
+billingSchema.index({ salesPerson: 1, date: -1, createdAt: -1 });
+billingSchema.index({ date: -1, createdAt: -1 });
 billingSchema.index({ createdAt: -1 });
+billingSchema.index({ updatedAt: -1 });
 billingSchema.index({ customerName: 1 });
 billingSchema.index({ mobile: 1 });
 

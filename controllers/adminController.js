@@ -20,21 +20,27 @@ export const getDashboardTotals = async (req, res) => {
     const startOfWeek = new Date();
     startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday as start
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const earliestPeriodStart = new Date(Math.min(startOfWeek.getTime(), startOfMonth.getTime()));
 
-    const totals = {
-      today: await Billing.aggregate([
-        { $match: { createdAt: { $gte: startOfToday } } },
-        { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: "$totalAmount" } } },
-      ]),
-      week: await Billing.aggregate([
-        { $match: { createdAt: { $gte: startOfWeek } } },
-        { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: "$totalAmount" } } },
-      ]),
-      month: await Billing.aggregate([
-        { $match: { createdAt: { $gte: startOfMonth } } },
-        { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: "$totalAmount" } } },
-      ]),
-    };
+    const [result] = await Billing.aggregate([
+      { $match: { createdAt: { $gte: earliestPeriodStart } } },
+      {
+        $facet: {
+          today: [
+            { $match: { createdAt: { $gte: startOfToday } } },
+            { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: "$totalAmount" } } },
+          ],
+          week: [
+            { $match: { createdAt: { $gte: startOfWeek } } },
+            { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: "$totalAmount" } } },
+          ],
+          month: [
+            { $group: { _id: null, count: { $sum: 1 }, totalAmount: { $sum: "$totalAmount" } } },
+          ],
+        },
+      },
+    ]);
+    const totals = result || { today: [], week: [], month: [] };
 
     res.status(200).json({ success: true, totals });
   } catch (error) {
@@ -97,13 +103,15 @@ export const getSalesPersonPerformance = async (req, res) => {
 // ---------------------------
 export const getRecentActivities = async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
     const activities = await Billing.find({})
       .sort({ updatedAt: -1 })
       .limit(limit)
+      .select("customerName totalAmount date createdAt updatedAt salesType paymentMode products branch salesPerson")
       .populate("salesPerson", "firstName lastName")
       .populate("branch", "name code")
-      .populate("products");
+      .populate("products", "name model serialNumber checkCode category price srp supportedAmount")
+      .lean();
 
     res.status(200).json({ success: true, activities });
   } catch (error) {

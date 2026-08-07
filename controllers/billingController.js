@@ -727,12 +727,10 @@ export const getAllBillings = async (req, res) => {
       };
     }
 
-    // Count matching documents
-    const totalCount = await Billing.countDocuments(filter);
-
     // Pagination inputs
-    const page = parseInt(req.query.page);
-    const limit = parseInt(req.query.limit);
+    const page = Math.max(parseInt(req.query.page, 10) || 0, 0);
+    const requestedLimit = parseInt(req.query.limit, 10) || 0;
+    const limit = requestedLimit ? Math.min(Math.max(requestedLimit, 1), 100) : 0;
     let query = Billing.find(filter)
       .populate("salesPerson", "firstName lastName email")
       .populate({
@@ -748,7 +746,43 @@ export const getAllBillings = async (req, res) => {
       query = query.skip(skip).limit(limit);
     }
 
-    let billings = await query.lean();
+    const shouldLoadStats = !page || page === 1;
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setUTCHours(23, 59, 59, 999);
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) - 1);
+
+    const statsPromise = shouldLoadStats
+      ? Billing.aggregate([
+          { $match: filter },
+          {
+            $group: {
+              _id: null,
+              totalBills: { $sum: 1 },
+              totalRevenue: { $sum: "$totalAmount" },
+              todayBills: {
+                $sum: { $cond: [{ $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] }, 1, 0] },
+              },
+              todayRevenue: {
+                $sum: { $cond: [{ $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] }, "$totalAmount", 0] },
+              },
+              monthRevenue: {
+                $sum: { $cond: [{ $and: [{ $gte: ["$date", monthStart] }, { $lte: ["$date", monthEnd] }] }, "$totalAmount", 0] },
+              },
+            },
+          },
+        ])
+      : null;
+
+    const [billingsResult, totalCount, statsResult] = await Promise.all([
+      query.lean(),
+      Billing.countDocuments(filter),
+      statsPromise,
+    ]);
+    let billings = billingsResult;
 
     // Fast batch resolution for unpopulated branch references
     const unpopulatedIds = new Set();
@@ -793,60 +827,9 @@ export const getAllBillings = async (req, res) => {
       monthRevenue: 0
     };
 
-    if (!page || page === 1) {
-      const now = new Date();
-      const todayStart = new Date(now);
-      todayStart.setUTCHours(0, 0, 0, 0);
-      const todayEnd = new Date(now);
-      todayEnd.setUTCHours(23, 59, 59, 999);
-
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      monthStart.setUTCHours(0, 0, 0, 0);
-      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      monthEnd.setUTCHours(23, 59, 59, 999);
-
-      const statsAgg = await Billing.aggregate([
-        { $match: filter },
-        {
-          $group: {
-            _id: null,
-            totalBills: { $sum: 1 },
-            totalRevenue: { $sum: "$totalAmount" },
-            todayBills: {
-              $sum: {
-                $cond: [
-                  { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
-                  1,
-                  0
-                ]
-              }
-            },
-            todayRevenue: {
-              $sum: {
-                $cond: [
-                  { $and: [{ $gte: ["$date", todayStart] }, { $lte: ["$date", todayEnd] }] },
-                  "$totalAmount",
-                  0
-                ]
-              }
-            },
-            monthRevenue: {
-              $sum: {
-                $cond: [
-                  { $and: [{ $gte: ["$date", monthStart] }, { $lte: ["$date", monthEnd] }] },
-                  "$totalAmount",
-                  0
-                ]
-              }
-            }
-          }
-        }
-      ]);
-
-      if (statsAgg.length > 0) {
-        stats = statsAgg[0];
+    if (shouldLoadStats && statsResult?.length > 0) {
+        stats = statsResult[0];
         delete stats._id;
-      }
     }
 
     const payload = {
