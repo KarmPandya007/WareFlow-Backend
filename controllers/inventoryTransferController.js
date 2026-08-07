@@ -213,25 +213,28 @@ export const getAllInventoryTransfers = async (req, res) => {
       query.createdBy = req.user._id;
     }
 
-    const { page, limit } = req.query;
-    const totalCount = await InventoryTransfer.countDocuments(query);
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const pageNum = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const limitNum = Number.isInteger(requestedLimit) && requestedLimit > 0
+      ? Math.min(requestedLimit, 100)
+      : 8;
 
-    let mongooseQuery = InventoryTransfer.find(query)
+    const mongooseQuery = InventoryTransfer.find(query)
       .populate("items.product", "model serialNumber")
       .populate("sourceGodown", "name")
       .populate("destinationGodown", "name")
       .populate("createdBy", "firstName lastName")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .lean();
 
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-
-    if (pageNum && limitNum) {
-      const skip = (pageNum - 1) * limitNum;
-      mongooseQuery = mongooseQuery.skip(skip).limit(limitNum);
-    }
-
-    const transfers = await mongooseQuery.lean();
+    // The count and page query are independent, so execute them concurrently.
+    const [totalCount, transfers] = await Promise.all([
+      InventoryTransfer.countDocuments(query),
+      mongooseQuery,
+    ]);
 
     const payload = {
       message: "Inventory transfers fetched successfully",
@@ -239,10 +242,8 @@ export const getAllInventoryTransfers = async (req, res) => {
       data: transfers
     };
 
-    if (pageNum && limitNum) {
-      payload.totalPages = Math.ceil(totalCount / limitNum);
-      payload.currentPage = pageNum;
-    }
+    payload.totalPages = Math.max(1, Math.ceil(totalCount / limitNum));
+    payload.currentPage = pageNum;
 
     res.status(200).json(payload);
   } catch (error) {

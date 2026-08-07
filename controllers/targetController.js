@@ -187,6 +187,41 @@ export const getMyTargets = async (req, res) => {
   }
 };
 
+// GET TARGETS FOR A SPECIFIC SALES PERSON (Admin)
+export const getTargetsByUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const user = await User.findOne({ _id: userId, role: "sales_person" })
+      .select("firstName lastName email employmentId")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Sales person not found" });
+    }
+
+    const targets = await Target.find({ user: userId })
+      .populate("assignedBy", "firstName lastName")
+      .sort({ createdAt: -1 });
+
+    await Promise.all(targets.map((target) => calculateProgress(target)));
+
+    return res.status(200).json({
+      success: true,
+      count: targets.length,
+      user,
+      targets,
+    });
+  } catch (error) {
+    console.error("Get targets by user error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch user targets" });
+  }
+};
+
 // UPDATE TARGET
 export const updateTarget = async (req, res) => {
   try {

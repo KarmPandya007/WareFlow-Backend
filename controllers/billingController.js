@@ -4,6 +4,7 @@ import Product from "../models/product.js";
 import Branch from "../models/branch.js";
 import Target from "../models/target.js";
 import { sendWhatsAppAdminText } from "../services/whatsappCloudService.js";
+import { sendInvoiceEmail } from "../services/invoiceEmailService.js";
 import QRUpload from "../models/QRUpload.js";
 import ExcelJS from "exceljs";
 import { Parser } from "json2csv";
@@ -462,11 +463,23 @@ export const createBilling = async (req, res) => {
       .session(transactionStarted ? session : null)
       .populate("branch", "name code location")
       .populate("salesPerson", "firstName lastName email")
-      .populate("products", "name model serialNumber");
+      .populate("products", "name model serialNumber checkCode category price");
 
     // Commit Transaction
     if (transactionStarted) await session.commitTransaction();
     session.endSession();
+
+    // Send the customer their invoice after it has been safely committed.
+    // Email failure must not roll back an invoice that already exists.
+    let emailDelivery = { sent: false, reason: "Customer email address was not provided" };
+    if (populatedBilling.email) {
+      try {
+        emailDelivery = await sendInvoiceEmail(populatedBilling);
+      } catch (err) {
+        emailDelivery = { sent: false, reason: err.message };
+        console.error(`⚠️ Customer invoice email failed:`, err.message);
+      }
+    }
 
     // WhatsApp notification (async, non-blocking)
     (async () => {
@@ -553,6 +566,7 @@ export const createBilling = async (req, res) => {
       success: true,
       message: "Invoice created successfully!",
       billing: populatedBilling,
+      emailDelivery,
     });
   } catch (error) {
     if (transactionStarted) await session.abortTransaction();

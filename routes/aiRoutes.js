@@ -1,7 +1,13 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { protect, authorizeRoles } from "../middleware/authMiddleware.js";
-import { chat } from "../controllers/aiController.js";
+import {
+  chat,
+  deleteConversation,
+  getConversation,
+  listConversations,
+  renameConversation,
+} from "../controllers/aiController.js";
 
 const router = express.Router();
 
@@ -17,7 +23,11 @@ const aiRateLimiter = rateLimit({
   },
 });
 
-// POST /api/ai/chat — Admin only
-router.post("/chat", aiRateLimiter, protect, authorizeRoles("admin"), chat);
+router.use(protect, authorizeRoles("admin"));
+router.get("/conversations", listConversations);
+router.get("/conversations/:id", getConversation);
+router.patch("/conversations/:id", renameConversation);
+router.delete("/conversations/:id", deleteConversation);
+router.post("/chat", aiRateLimiter, chat);
 
 export default router;
