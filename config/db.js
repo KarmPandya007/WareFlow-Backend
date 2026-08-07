@@ -1,14 +1,28 @@
 import mongoose from "mongoose";
 
-export const connectDB = async () => {
-  try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log("MongoDB Connected");
-  } catch (err) {
-    console.error(err, "MongoDB connection failed");
-    process.exit(1);
-  }
-};
+let connectionPromise = null;
 
+export const connectDB = async () => {
+  if (mongoose.connection.readyState === 1) return mongoose.connection;
+
+  if (!process.env.MONGO_URI) {
+    throw new Error("MONGO_URI is not configured");
+  }
+
+  if (!connectionPromise) {
+    connectionPromise = mongoose
+      .connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 10000 })
+      .then(() => {
+        console.log("MongoDB Connected");
+        return mongoose.connection;
+      })
+      .catch((error) => {
+        connectionPromise = null;
+        throw error;
+      });
+  }
+
+  return connectionPromise;
+};
 
 

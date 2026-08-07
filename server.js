@@ -26,13 +26,13 @@ import aiRoutes from "./routes/aiRoutes.js";
 
 
 dotenv.config();
-connectDB();
 
 const app = express();
+const clientOrigin = (process.env.CLIENT_URL || "http://localhost:3000").replace(/\/+$/, "");
 app.use(compression());
 app.use(cookieParser());
 app.use(cors({
-  origin: process.env.CLIENT_URL || "http://localhost:3000" || "https://ware-flow-frontend-u3lj-xi.vercel.app/",
+  origin: clientOrigin,
   credentials: true,
 }));
 
@@ -47,6 +47,22 @@ app.get("/api/health", (req, res) => {
     message: "Server is running!",
     timestamp: new Date().toISOString()
   });
+});
+
+// Establish and reuse the database connection only for routes that need it.
+// CORS preflight and health checks must remain available even if MongoDB is
+// temporarily unavailable during a serverless cold start.
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("MongoDB connection failed:", error.message);
+    res.status(503).json({
+      success: false,
+      message: "Database is temporarily unavailable",
+    });
+  }
 });
 
 app.use("/api/auth", authRoutes);
@@ -88,19 +104,31 @@ app.use((req, res) => {
   });
 });
 
-cron.schedule("0 0 */30 * *", async () => {
-  console.log("🔄 Cron Job: Refreshing WhatsApp access token...");
-  try {
-    await refreshWhatsAppToken();
-  } catch (error) {
-    console.error("❌ WhatsApp token refresh failed:", error.message);
-  }
-});
+if (!process.env.VERCEL) {
+  cron.schedule("0 0 */30 * *", async () => {
+    console.log("🔄 Cron Job: Refreshing WhatsApp access token...");
+    try {
+      await refreshWhatsAppToken();
+    } catch (error) {
+      console.error("❌ WhatsApp token refresh failed:", error.message);
+    }
+  });
+}
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 API available at http://localhost:${PORT}`);
-  console.log(`🌐 CORS enabled for: ${process.env.CLIENT_URL || "http://localhost:3000"}`);
-});
+if (!process.env.VERCEL) {
+  connectDB()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`🚀 Server running on port ${PORT}`);
+        console.log(`📡 API available at http://localhost:${PORT}`);
+        console.log(`🌐 CORS enabled for: ${clientOrigin}`);
+      });
+    })
+    .catch((error) => {
+      console.error("MongoDB connection failed:", error.message);
+      process.exitCode = 1;
+    });
+}
 
+export default app;
