@@ -32,7 +32,7 @@ const app = express();
 app.use(compression());
 app.use(cookieParser());
 app.use(cors({
-  origin: process.env.CLIENT_URL || "http://localhost:3000",
+  origin: process.env.CLIENT_URL || "http://localhost:3000" || "https://ware-flow-frontend-u3lj-xi.vercel.app/",
   credentials: true,
 }));
 
